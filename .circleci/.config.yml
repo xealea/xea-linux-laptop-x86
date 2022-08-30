@@ -1,0 +1,18 @@
+version: 2.1
+jobs:
+  compile:
+   docker:
+      - image: xealea/xea:01
+   steps:
+      - run:
+          command: |
+            export token=$TG_TOKEN
+            git clone --depth=1 https://github.com/xealea/xea-linux-x86.git
+            cd xea-linux-x86
+            curl -s https://raw.githubusercontent.com/xealea/builder-kernel-x86/master/debpkg | bash
+          no_output_timeout : 5h
+workflows:
+  version: 2.1
+  cooking:
+    jobs:
+      - compile 
