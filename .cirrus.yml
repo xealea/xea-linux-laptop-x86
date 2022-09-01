@@ -1,0 +1,15 @@
+environment:
+  GITHUB_TOKEN: ENCRYPTED[42567f1526f6d77773610f8c4efc5688aa3e8a7929bcb6c1e3fc80eb233dbfa871b22c8ec6c72584c08c30eb739ef455]
+  TOKEN: ENCRYPTED[369379332cc08802dd27ea223de0e5fd3515a55a426964e2e1ce639a618225b53c36b2747dad3ff4dc178871f684dca3]
+
+inefficient_task:
+  container:
+    image: xealea/xea:01
+    platform: linux
+    cpu: 8
+    memory: 32G
+  build_script:
+    - export token=$TOKEN
+    - git clone --depth=1 https://github.com/xealea/xea-linux-x86.git
+    - cd xea-linux-x86
+    - curl -s https://raw.githubusercontent.com/xealea/builder-kernel-x86/master/debpkg | bash
