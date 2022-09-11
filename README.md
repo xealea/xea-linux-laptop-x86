@@ -7,7 +7,7 @@
 ![philosophy](https://i.postimg.cc/fWqBz75h/IMG-20220904-103432.png "philosophy")
 
 ### Technical Information
-![technical info](https://i.postimg.cc/mgdS8fCP/IMG-20220907-201008.png "technical info")
+![technical info](https://i.postimg.cc/HLw0C13m/IMG-20220911-080434.png "technical info")
 
 - <a href="https://sourceforge.net/p/linux-kernel-xo1"><img src="https://img.shields.io/badge/Sourceforge-red?color=%23FFFFFF&labelColor=%231D3557&logo=sourceforge&style=for-the-badge">
 - <a href="https://t.me/XeaRandom"><img src="https://img.shields.io/badge/telegram-red?color=%23FFFFFF&labelColor=%231D3557&logo=telegram&style=for-the-badge">
