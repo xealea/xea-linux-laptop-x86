@@ -134,5 +134,8 @@ obj-$(CONFIG_X86_INTEL_LPSS)		+= pmc_atom.o
 # Siemens Simatic Industrial PCs
 obj-$(CONFIG_SIEMENS_SIMATIC_IPC)	+= simatic-ipc.o
 
+# Steamdeck Support
+obj-$(CONFIG_STEAMDECK)             += steamdeck.o
+
 # Winmate
 obj-$(CONFIG_WINMATE_FM07_KEYS)		+= winmate-fm07-keys.o
