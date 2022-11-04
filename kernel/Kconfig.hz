@@ -5,7 +5,7 @@
 
 choice
 	prompt "Timer frequency"
-	default HZ_500
+	default HZ_1000
 	help
 	 Allows the configuration of the timer frequency. It is customary
 	 to have the timer interrupt run at 1000 Hz but 100 Hz may be more
@@ -53,6 +53,11 @@ choice
 	 1000 Hz is the preferred choice for desktop systems and other
 	 systems requiring fast interactive responses to events.
 
+	 config HZ_2000
+		bool "2000 HZ"
+	help
+	 2000 Hz is BASED ON CALCULATE.
+
 endchoice
 
 config HZ
@@ -62,6 +67,7 @@ config HZ
 	default 300 if HZ_300
 	default 500 if HZ_500
 	default 1000 if HZ_1000
+	default 2000 if HZ_2000
 
 config SCHED_HRTICK
 	def_bool HIGH_RES_TIMERS
