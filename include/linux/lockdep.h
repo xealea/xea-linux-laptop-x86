@@ -249,6 +249,8 @@ static inline int lockdep_match_key(struct lockdep_map *lock,
 	return lock->key == key;
 }
 
+struct lock_class *lockdep_hlock_class(struct held_lock *hlock);
+
 /*
  * Acquire a lock.
  *
@@ -343,6 +345,8 @@ extern void lock_unpin_lock(struct lockdep_map *lock, struct pin_cookie);
 #define lockdep_pin_lock(l)	lock_pin_lock(&(l)->dep_map)
 #define lockdep_repin_lock(l,c)	lock_repin_lock(&(l)->dep_map, (c))
 #define lockdep_unpin_lock(l,c)	lock_unpin_lock(&(l)->dep_map, (c))
+
+int lock_class_is_held(struct lock_class_key *key);
 
 /*
  * Must use lock_map_aquire_try() with override maps to avoid
@@ -441,6 +445,8 @@ extern int lockdep_is_held(const void *);
 #define lockdep_pin_lock(l)			({ struct pin_cookie cookie = { }; cookie; })
 #define lockdep_repin_lock(l, c)		do { (void)(l); (void)(c); } while (0)
 #define lockdep_unpin_lock(l, c)		do { (void)(l); (void)(c); } while (0)
+
+static inline int lock_class_is_held(struct lock_class_key *key) { return 0; }
 
 #define DEFINE_WAIT_OVERRIDE_MAP(_name, _wait_type)	\
 	struct lockdep_map __maybe_unused _name = {}
@@ -687,6 +693,12 @@ static inline void
 lockdep_rcu_suspicious(const char *file, const int line, const char *s)
 {
 }
+#endif
+
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+void lockdep_set_no_check_recursion(struct lockdep_map *map);
+#else
+static inline void lockdep_set_no_check_recursion(struct lockdep_map *map) {}
 #endif
 
 #endif /* __LINUX_LOCKDEP_H */
