@@ -1305,6 +1305,12 @@ static void set_load_weight(struct task_struct *p, bool update_load)
 	}
 }
 
+static inline void set_latency_prio(struct task_struct *p, int prio)
+{
+	p->latency_prio = prio;
+	set_latency_fair(&p->se, prio - MAX_RT_PRIO);
+}
+
 #ifdef CONFIG_UCLAMP_TASK
 /*
  * Serializes updates of utilization clamp values
@@ -4485,6 +4491,117 @@ int wake_up_state(struct task_struct *p, unsigned int state)
 	return try_to_wake_up(p, state, 0);
 }
 
+#ifdef CONFIG_SCHED_BORE
+extern unsigned int sched_burst_cache_lifetime;
+extern unsigned int sched_bore;
+extern unsigned int sched_burst_fork_atavistic;
+
+void __init sched_init_bore(void) {
+	init_task.child_burst_cache = 0;
+	init_task.child_burst_count_cache = 0;
+	init_task.child_burst_last_cached = 0;
+	init_task.se.burst_time = 0;
+	init_task.se.prev_burst_penalty = 0;
+	init_task.se.curr_burst_penalty = 0;
+	init_task.se.burst_penalty = 0;
+}
+
+void inline sched_fork_bore(struct task_struct *p) {
+	p->child_burst_cache = 0;
+	p->child_burst_count_cache = 0;
+	p->child_burst_last_cached = 0;
+	p->se.burst_time = 0;
+	p->se.curr_burst_penalty = 0;
+}
+
+static u32 count_child_tasks(struct task_struct *p) {
+	struct task_struct *child;
+	u32 cnt = 0;
+	list_for_each_entry(child, &p->children, sibling) {cnt++;}
+	return cnt;
+}
+
+static inline bool child_burst_cache_expired(struct task_struct *p, u64 now) {
+	return (p->child_burst_last_cached + sched_burst_cache_lifetime < now);
+}
+
+static void __update_child_burst_cache(
+	struct task_struct *p, u32 cnt, u32 sum, u64 now) {
+	u16 avg = 0;
+	if (cnt) avg = DIV_ROUND_CLOSEST(sum, cnt);
+	p->child_burst_cache = max(avg, p->se.burst_penalty);
+	p->child_burst_count_cache = cnt;
+	p->child_burst_last_cached = now;
+}
+
+static void update_child_burst_cache(struct task_struct *p, u64 now) {
+	struct task_struct *child;
+	u32 cnt = 0;
+	u32 sum = 0;
+
+	list_for_each_entry(child, &p->children, sibling) {
+		cnt++;
+		sum += child->se.burst_penalty;
+	}
+
+	__update_child_burst_cache(p, cnt, sum, now);
+}
+
+static void update_child_burst_cache_atavistic(
+	struct task_struct *p, u64 now, u32 depth, u32 *acnt, u32 *asum) {
+	struct task_struct *child, *dec;
+	u32 cnt = 0, dcnt = 0;
+	u32 sum = 0;
+
+	list_for_each_entry(child, &p->children, sibling) {
+		dec = child;
+		while ((dcnt = count_child_tasks(dec)) == 1)
+			dec = list_first_entry(&dec->children, struct task_struct, sibling);
+		
+		if (!dcnt || !depth) {
+			cnt++;
+			sum += dec->se.burst_penalty;
+		} else {
+			if (child_burst_cache_expired(dec, now))
+				update_child_burst_cache_atavistic(dec, now, depth - 1, &cnt, &sum);
+			else {
+				cnt += dec->child_burst_count_cache;
+				sum += (u32)dec->child_burst_cache * dec->child_burst_count_cache;
+			}
+		}
+	}
+
+	__update_child_burst_cache(p, cnt, sum, now);
+	*acnt += cnt;
+	*asum += sum;
+}
+
+static void fork_burst_penalty(struct task_struct *p) {
+	struct sched_entity *se = &p->se;
+	struct task_struct *anc = p->real_parent;
+	u64 now = ktime_get_ns();
+	u32 cnt = 0;
+	u32 sum = 0;
+
+	read_lock(&tasklist_lock);
+	
+	if (likely(sched_bore) && likely(sched_burst_fork_atavistic)) {
+		while ((anc->real_parent != anc) && (count_child_tasks(anc) == 1))
+			anc = anc->real_parent;
+		if (child_burst_cache_expired(anc, now))
+			update_child_burst_cache_atavistic(
+				anc, now, sched_burst_fork_atavistic - 1, &cnt, &sum);
+	} else
+		if (child_burst_cache_expired(anc, now))
+			update_child_burst_cache(anc, now);
+
+	read_unlock(&tasklist_lock);
+
+	se->burst_penalty = se->prev_burst_penalty =
+		max(se->prev_burst_penalty, anc->child_burst_cache);
+}
+#endif // CONFIG_SCHED_BORE
+
 /*
  * Perform scheduler related setup for a newly forked process p.
  * p is forked by current.
@@ -4501,7 +4618,13 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	p->se.prev_sum_exec_runtime	= 0;
 	p->se.nr_migrations		= 0;
 	p->se.vruntime			= 0;
+#ifdef CONFIG_SCHED_BORE
+	sched_fork_bore(p);
+#endif // CONFIG_SCHED_BORE
+	p->se.vlag			= 0;
 	INIT_LIST_HEAD(&p->se.group_node);
+
+	set_latency_prio(p, p->latency_prio);
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	p->se.cfs_rq			= NULL;
@@ -4754,6 +4877,7 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 
 		p->prio = p->normal_prio = p->static_prio;
 		set_load_weight(p, false);
+		set_latency_prio(p, NICE_TO_PRIO(0));
 
 		/*
 		 * We don't need the reset flag anymore after the fork. It has
@@ -4818,6 +4942,9 @@ void sched_cgroup_fork(struct task_struct *p, struct kernel_clone_args *kargs)
 
 void sched_post_fork(struct task_struct *p)
 {
+#ifdef CONFIG_SCHED_BORE
+	fork_burst_penalty(p);
+#endif // CONFIG_SCHED_BORE
 	uclamp_post_fork(p);
 }
 
@@ -7516,7 +7643,7 @@ static struct task_struct *find_process_by_pid(pid_t pid)
 #define SETPARAM_POLICY	-1
 
 static void __setscheduler_params(struct task_struct *p,
-		const struct sched_attr *attr)
+				  const struct sched_attr *attr)
 {
 	int policy = attr->sched_policy;
 
@@ -7538,6 +7665,13 @@ static void __setscheduler_params(struct task_struct *p,
 	p->rt_priority = attr->sched_priority;
 	p->normal_prio = normal_prio(p);
 	set_load_weight(p, true);
+}
+
+static void __setscheduler_latency(struct task_struct *p,
+				   const struct sched_attr *attr)
+{
+	if (attr->sched_flags & SCHED_FLAG_LATENCY_NICE)
+		set_latency_prio(p, NICE_TO_PRIO(attr->sched_latency_nice));
 }
 
 /*
@@ -7674,6 +7808,13 @@ recheck:
 			return retval;
 	}
 
+	if (attr->sched_flags & SCHED_FLAG_LATENCY_NICE) {
+		if (attr->sched_latency_nice > MAX_NICE)
+			return -EINVAL;
+		if (attr->sched_latency_nice < MIN_NICE)
+			return -EINVAL;
+	}
+
 	/* Update task specific "requested" clamps */
 	if (attr->sched_flags & SCHED_FLAG_UTIL_CLAMP) {
 		retval = uclamp_validate(p, attr);
@@ -7720,6 +7861,9 @@ recheck:
 		if (dl_policy(policy) && dl_param_changed(p, attr))
 			goto change;
 		if (attr->sched_flags & SCHED_FLAG_UTIL_CLAMP)
+			goto change;
+		if (attr->sched_flags & SCHED_FLAG_LATENCY_NICE &&
+		    attr->sched_latency_nice != PRIO_TO_NICE(p->latency_prio))
 			goto change;
 
 		p->sched_reset_on_fork = reset_on_fork;
@@ -7809,6 +7953,7 @@ change:
 		__setscheduler_params(p, attr);
 		__setscheduler_prio(p, newprio);
 	}
+	__setscheduler_latency(p, attr);
 	__setscheduler_uclamp(p, attr);
 
 	if (queued) {
@@ -8020,6 +8165,9 @@ static int sched_copy_attr(struct sched_attr __user *uattr, struct sched_attr *a
 	    size < SCHED_ATTR_SIZE_VER1)
 		return -EINVAL;
 
+	if ((attr->sched_flags & SCHED_FLAG_LATENCY_NICE) &&
+	    size < SCHED_ATTR_SIZE_VER2)
+		return -EINVAL;
 	/*
 	 * XXX: Do we want to be lenient like existing syscalls; or do we want
 	 * to be strict and return an error on out-of-bounds values?
@@ -8256,6 +8404,8 @@ SYSCALL_DEFINE4(sched_getattr, pid_t, pid, struct sched_attr __user *, uattr,
 		kattr.sched_flags |= SCHED_FLAG_RESET_ON_FORK;
 	get_params(p, &kattr);
 	kattr.sched_flags &= SCHED_FLAG_ALL;
+
+	kattr.sched_latency_nice = PRIO_TO_NICE(p->latency_prio);
 
 #ifdef CONFIG_UCLAMP_TASK
 	/*
@@ -9921,6 +10071,11 @@ void __init sched_init(void)
 	BUG_ON(&dl_sched_class != &stop_sched_class + 1);
 #endif
 
+#ifdef CONFIG_SCHED_BORE
+	sched_init_bore();
+	printk(KERN_INFO "BORE (Burst-Oriented Response Enhancer) CPU Scheduler modification 3.1.3 by Masahito Suzuki");
+#endif // CONFIG_SCHED_BORE
+
 	wait_bit_init();
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
@@ -11180,6 +11335,25 @@ static int cpu_idle_write_s64(struct cgroup_subsys_state *css,
 {
 	return sched_group_set_idle(css_tg(css), idle);
 }
+
+static s64 cpu_latency_nice_read_s64(struct cgroup_subsys_state *css,
+				    struct cftype *cft)
+{
+	return PRIO_TO_NICE(css_tg(css)->latency_prio);
+}
+
+static int cpu_latency_nice_write_s64(struct cgroup_subsys_state *css,
+				     struct cftype *cft, s64 nice)
+{
+	int prio;
+
+	if (nice < MIN_NICE || nice > MAX_NICE)
+		return -ERANGE;
+
+	prio = NICE_TO_PRIO(nice);
+
+	return sched_group_set_latency(css_tg(css), prio);
+}
 #endif
 
 static struct cftype cpu_legacy_files[] = {
@@ -11193,6 +11367,11 @@ static struct cftype cpu_legacy_files[] = {
 		.name = "idle",
 		.read_s64 = cpu_idle_read_s64,
 		.write_s64 = cpu_idle_write_s64,
+	},
+	{
+		.name = "latency.nice",
+		.read_s64 = cpu_latency_nice_read_s64,
+		.write_s64 = cpu_latency_nice_write_s64,
 	},
 #endif
 #ifdef CONFIG_CFS_BANDWIDTH
@@ -11410,6 +11589,12 @@ static struct cftype cpu_files[] = {
 		.flags = CFTYPE_NOT_ON_ROOT,
 		.read_s64 = cpu_idle_read_s64,
 		.write_s64 = cpu_idle_write_s64,
+	},
+	{
+		.name = "latency.nice",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.read_s64 = cpu_latency_nice_read_s64,
+		.write_s64 = cpu_latency_nice_write_s64,
 	},
 #endif
 #ifdef CONFIG_CFS_BANDWIDTH
