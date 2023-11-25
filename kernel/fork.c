@@ -100,6 +100,10 @@
 #include <linux/user_events.h>
 #include <linux/iommu.h>
 
+#ifdef CONFIG_USER_NS
+#include <linux/user_namespace.h>
+#endif
+
 #include <asm/pgalloc.h>
 #include <linux/uaccess.h>
 #include <asm/mmu_context.h>
@@ -2084,6 +2088,10 @@ static __poll_t pidfd_poll(struct file *file, struct poll_table_struct *pts)
 
 	poll_wait(file, &pid->wait_pidfd, pts);
 
+	if ((clone_flags & CLONE_NEWUSER) && !unprivileged_userns_clone)
+		if (!capable(CAP_SYS_ADMIN))
+			return ERR_PTR(-EPERM);
+
 	/*
 	 * Inform pollers only when the whole thread group exits.
 	 * If the thread group leader exits before all other threads in the
@@ -3421,6 +3429,12 @@ int ksys_unshare(unsigned long unshare_flags)
 	 */
 	if (unshare_flags & CLONE_NEWNS)
 		unshare_flags |= CLONE_FS;
+
+	if ((unshare_flags & CLONE_NEWUSER) && !unprivileged_userns_clone) {
+		err = -EPERM;
+		if (!capable(CAP_SYS_ADMIN))
+			goto bad_unshare_out;
+	}
 
 	if ((unshare_flags & CLONE_NEWUSER) && !unprivileged_userns_clone) {
 		err = -EPERM;
